@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>XR Dolly + Haptics Demo</title>
+  <style>
+    html,body { margin:0; height:100%; overflow:hidden; background:#111; color:#eee; font-family: monospace; }
+    #feedback {
+      position: fixed;
+      bottom: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80%;
+      height: 1rem;
+      background: rgba(255,255,255,0.05);
+      border-radius: 0.5rem;
+      overflow: hidden;
+    }
+    #fill {
+      width:0%;
+      height:100%;
+      background: #0f0;
+    }
+    #hint {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      font-size: .75rem;
+      background: rgba(0,0,0,0.5);
+      padding: .3em .6em;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="hint">
+  Left-stick = strafe/walk • Right-stick X = yaw • Right-stick Y = walk • Right trigger = sprint
+</div>
+<div id="feedback"><div id="fill"></div></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":       "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.min.js",
+    "VRButton":    "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/webxr/VRButton.js",
+    "XRControllerModelFactory": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/webxr/XRControllerModelFactory.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'VRButton';
+import { XRControllerModelFactory } from 'XRControllerModelFactory';
+
+// ── Renderer & VRButton ────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+// ── Scene, Camera, Dolly ───────────────────────────────────────────────
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x202020);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 1000);
+const dolly  = new THREE.Group();
+camera.position.set(0,1.6,0);
+dolly.add(camera);
+scene.add(dolly);
+
+// ── Simple world ────────────────────────────────────────────────────────
+scene.add(new THREE.HemisphereLight(0xffffbb, 0x080820, .8));
+scene.add(new THREE.GridHelper(40, 40, 0x444444, 0x333333));
+
+// ── VR Controllers Models ──────────────────────────────────────────────
+const factory = new XRControllerModelFactory();
+renderer.xr.addEventListener('sessionstart', ()=>{
+  const ctrlL = renderer.xr.getController(0);
+  const ctrlR = renderer.xr.getController(1);
+  dolly.add(ctrlL, ctrlR);
+  const gripL = renderer.xr.getControllerGrip(0);
+  const gripR = renderer.xr.getControllerGrip(1);
+  gripL.add(factory.createControllerModel(gripL));
+  gripR.add(factory.createControllerModel(gripR));
+  dolly.add(gripL, gripR);
+});
+
+// ── Movement State ─────────────────────────────────────────────────────
+const FWD   = new THREE.Vector3();
+const RIGHT = new THREE.Vector3();
+let runMul    = 1;
+const BASE_SPEED = 2;    // m/s
+const YAW_SPEED  = 1.5;  // rad/s
+const DEADZONE   = 0.2;
+const clock      = new THREE.Clock();
+
+// ── Feedback Elements ───────────────────────────────────────────────────
+const fillBar = document.getElementById('fill');
+
+// ── Main Loop ──────────────────────────────────────────────────────────
+renderer.setAnimationLoop(()=>{
+  const dt = clock.getDelta();
+  if(renderer.xr.isPresenting) xrMove(dt);
+  renderer.render(scene, camera);
+});
+
+// ── XR Move + Haptics ──────────────────────────────────────────────────
+function xrMove(dt) {
+  const ses = renderer.xr.getSession();
+  if(!ses) return;
+
+  // build view-aligned basis
+  camera.getWorldDirection(FWD);
+  FWD.y = 0; FWD.normalize();
+  RIGHT.crossVectors(FWD, new THREE.Vector3(0,1,0)).normalize();
+
+  ses.inputSources.forEach(src=>{
+    const gp = src.gamepad;
+    if(!gp) return;
+
+    // axes[2]/[3] = thumbstick
+    const sx = gp.axes[2]||0;
+    const sy = gp.axes[3]||0;
+    const mag = Math.hypot(sx, sy);
+
+    // right trigger sprint = button[1]
+    if(src.handedness==='right' && gp.buttons[1]) {
+      runMul += (gp.buttons[1].value>0.5? dt : -dt);
+      runMul = THREE.MathUtils.clamp(runMul, 1, 3);
+    }
+
+    // haptics intensity ∝ stick magnitude
+    if(gp.hapticActuators && gp.hapticActuators[0] && mag>DEADZONE) {
+      gp.hapticActuators[0].pulse(mag, 20);
+    }
+
+    // update on-screen gradient
+    fillBar.style.width = `${THREE.MathUtils.clamp(mag,0,1)*100}%`;
+
+    // left = strafe/walk
+    if(src.handedness==='left' && mag>DEADZONE) {
+      dolly.position.addScaledVector(RIGHT, sx * BASE_SPEED * dt * runMul);
+      dolly.position.addScaledVector(FWD,  -sy * BASE_SPEED * dt * runMul);
+    }
+
+    // right = yaw + walk
+    if(src.handedness==='right') {
+      if(Math.abs(sx)>DEADZONE) dolly.rotation.y -= sx * YAW_SPEED * dt;
+      if(Math.abs(sy)>DEADZONE) dolly.position.addScaledVector(FWD, -sy * BASE_SPEED * dt * runMul);
+    }
+  });
+}
+
+// ── Resize ─────────────────────────────────────────────────────────────
+window.addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
