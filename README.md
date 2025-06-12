@@ -1,4 +1,4 @@
-![image](https://github.com/user-attachments/assets/391c36e2-635b-4be2-8b16-5bcf95446d25)
+![image](https://github.com/user-attachments/assets/80e8b1ba-63eb-482b-9d36-368810f9e5f6)
 
 
 Self Contained Joystick Navigation Demo for [ThreeJS R177](https://github.com/mrdoob/three.js/releases/tag/r177)
